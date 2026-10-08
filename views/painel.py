@@ -2,6 +2,7 @@
 import plotly.express as px
 import streamlit as st
 
+import db
 import ui
 
 ui.configurar()
@@ -9,6 +10,7 @@ dados, res = ui.contexto()
 pedidos, ordens, mrp, prog = dados["pedidos"], res["ordens"], res["mrp"], res["programa"]
 
 st.title("🏭 Mini-PCP")
+st.markdown(f"**{db.empresa()['nome']}** · {db.empresa()['descricao']} (dados fictícios)")
 st.caption("Planejamento e controle da produção para pequenas indústrias: "
            "pedidos → necessidade de produção → MRP de materiais → programação por máquina.")
 
@@ -18,9 +20,9 @@ urgentes = mrp[mrp["status"] == "🔴 Falta - urgente"]
 a_comprar = mrp[mrp["sugestao_compra"] > 0]
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Pedidos abertos", len(abertos), f"{ui.num(abertos['quantidade'].sum())} pct",
+c1.metric("Pedidos abertos", len(abertos), f"{ui.num(abertos['quantidade'].sum())} {ui.un()}",
           delta_color="off")
-c2.metric("Ordens de produção", len(ordens), f"{ui.num(ordens['quantidade'].sum())} pct a produzir",
+c2.metric("Ordens de produção", len(ordens), f"{ui.num(ordens['quantidade'].sum())} {ui.un()} a produzir",
           delta_color="off")
 c3.metric("Ordens que atrasam", len(atrasadas),
           "verificar programação" if len(atrasadas) else "tudo no prazo",
@@ -44,7 +46,7 @@ with esq:
         fig = px.bar(carga, x="dias_de_carga", y="maquina", orientation="h",
                      text=carga["dias_de_carga"].map(lambda v: f"{ui.num(v, 1)} dias"),
                      labels={"dias_de_carga": "Dias de produção na fila", "maquina": ""})
-        fig.update_traces(marker_color="#2f6db5", textposition="outside", cliponaxis=False)
+        fig.update_traces(marker_color="#3987e5", textposition="outside", cliponaxis=False)
         fig.update_layout(height=280, margin=dict(l=0, r=40, t=10, b=0))
         st.plotly_chart(fig)
 
@@ -81,4 +83,4 @@ if not atrasadas.empty:
 
 st.divider()
 st.markdown("**Como usar:** cadastre pedidos em *Pedidos*, ajuste saldos em *Estoque*, "
-            "revise receitas e máquinas em *Ficha técnica* e acompanhe *MRP* e *Programação*.")
+            "revise receitas e máquinas em *Ficha técnica* e acompanhe *MRP*, *Programação* e *Compras*.")

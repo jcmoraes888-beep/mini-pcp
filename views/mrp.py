@@ -21,7 +21,7 @@ else:
         hide_index=True,
         column_config={
             "pedido_id": "Pedido", "cliente": "Cliente", "codigo": "Código", "produto": "Produto",
-            "quantidade": st.column_config.NumberColumn("Produzir (pct)", format="localized"),
+            "quantidade": st.column_config.NumberColumn(f"Produzir ({ui.un()})", format="localized"),
             "data_entrega": st.column_config.DateColumn("Entrega", format=ui.FMT_DATA),
         },
     )

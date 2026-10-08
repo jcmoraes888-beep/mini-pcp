@@ -34,19 +34,47 @@ k3.metric("Término da última ordem",
           com_horario["fim"].max().strftime("%d/%m %H:%M") if not com_horario.empty else "-")
 
 if not com_horario.empty:
-    g = com_horario.assign(rotulo=com_horario["codigo"] + " · " + com_horario["cliente"])
+    # Cores fixas por produto (paleta categórica validada para daltonismo no tema escuro,
+    # sem vermelho: vermelho fica reservado para atraso)
+    PALETA = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300",
+              "#9085e9", "#8a8577"]
+    codigos = sorted(dados["produtos"].query("tipo == 'PA'")["codigo"])
+    cores = {c: PALETA[i % len(PALETA)] for i, c in enumerate(codigos)}
+
+    g = com_horario.assign(
+        rotulo=com_horario["codigo"] + " · " + com_horario["cliente"],
+        texto=com_horario["codigo"] + "<br>" + com_horario["quantidade"].map(ui.num),
+    )
     fig = px.timeline(g, x_start="inicio", x_end="fim", y="maquina", color="codigo",
-                      text="codigo", hover_name="rotulo",
+                      text="texto", hover_name="rotulo", color_discrete_map=cores,
+                      category_orders={"codigo": codigos,
+                                       "maquina": sorted(g["maquina"].unique())},
                       hover_data={"quantidade": ":,.0f", "data_entrega": True,
-                                  "situacao": True, "maquina": False, "codigo": False},
+                                  "situacao": True, "maquina": False, "codigo": False,
+                                  "texto": False},
                       labels={"maquina": "", "codigo": "Produto"})
-    fig.update_yaxes(autorange="reversed")
-    fig.update_traces(marker_line_color="white", marker_line_width=1, textangle=0,
-                      insidetextanchor="middle")
-    fig.add_vline(x=datetime.now(), line_dash="dot", line_color="gray")
-    fig.update_layout(height=120 + 70 * g["maquina"].nunique(),
-                      margin=dict(l=0, r=0, t=10, b=0), legend_title_text="")
+    fig.update_yaxes(tickfont=dict(size=14))
+    fig.update_xaxes(tickformat="%d/%m\n%H:%M", tickfont=dict(size=12),
+                     gridcolor="rgba(128,128,128,0.18)")
+    fig.update_traces(width=0.7, offset=-0.35, marker_line_color="#111318", marker_line_width=2,
+                      textangle=0, textposition="inside", insidetextanchor="middle",
+                      textfont=dict(size=13))
+    TEXTO_ESCURO = {"#199e70", "#c98500"}  # cores claras pedem texto escuro
+    for trace in fig.data:
+        cor = cores.get(trace.name, "")
+        trace.textfont.color = "#111111" if cor in TEXTO_ESCURO else "white"
+    agora = datetime.now()
+    fig.add_vline(x=agora, line_dash="dot", line_color="gray")
+    fig.add_annotation(x=agora, y=1.02, yref="paper", text="agora", showarrow=False,
+                       font=dict(size=12, color="gray"))
+    fig.update_layout(barmode="overlay", height=160 + 110 * g["maquina"].nunique(),
+                      margin=dict(l=0, r=0, t=30, b=0), uniformtext_minsize=10,
+                      uniformtext_mode="hide",
+                      legend=dict(title_text="", orientation="h", y=-0.15, x=0,
+                                  font=dict(size=13)))
     st.plotly_chart(fig)
+    st.caption("Cada bloco = uma ordem (código e quantidade). Blocos curtos escondem o texto: "
+               "passe o mouse para ver cliente, entrega e situação.")
 
 st.dataframe(
     prog, hide_index=True,

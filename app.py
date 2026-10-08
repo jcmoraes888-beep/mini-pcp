@@ -16,13 +16,21 @@ paginas = st.navigation({
     "Planejamento": [
         st.Page("views/mrp.py", title="MRP", icon="🧮"),
         st.Page("views/programacao.py", title="Programação", icon="📅"),
+        st.Page("views/compras.py", title="Compras", icon="🛒"),
     ],
 })
 
 with st.sidebar:
-    st.caption("Panificadora Trigo Bom · empresa fictícia para demonstração")
+    atual = db.exemplo_atual()
+    escolha = st.selectbox("Empresa de exemplo", list(db.EXEMPLOS),
+                           index=list(db.EXEMPLOS).index(atual),
+                           format_func=lambda k: db.EXEMPLOS[k]["nome"])
+    if escolha != atual:
+        db.carregar_exemplo(escolha)
+        st.rerun()
+    st.caption(f"{db.EXEMPLOS[atual]['descricao']} · empresa fictícia para demonstração")
     if st.button("↺ Restaurar dados de exemplo", width="stretch"):
-        db.carregar_exemplo()
+        db.carregar_exemplo(atual)
         st.toast("Dados de exemplo restaurados.")
         st.rerun()
 

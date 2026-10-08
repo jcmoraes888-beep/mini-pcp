@@ -20,7 +20,8 @@ vista["valor_estoque"] = vista["estoque_atual"] * vista["custo_unit"]
 st.caption("Edite saldo, mínimo, lead time e custo direto na tabela e clique em salvar.")
 editado = st.data_editor(
     vista[["id", "codigo", "nome", "tipo", "unidade", "estoque_atual", "estoque_minimo",
-           "situacao", "lead_time_dias", "custo_unit", "valor_estoque"]],
+           "situacao", "lead_time_dias", "custo_unit", "valor_estoque", "fornecedor",
+           "consumo_90d"]],
     hide_index=True, key="editor_estoque",
     disabled=["id", "codigo", "tipo", "situacao", "valor_estoque"],
     column_config={
@@ -33,15 +34,19 @@ editado = st.data_editor(
         "custo_unit": st.column_config.NumberColumn("Custo unit. (R$)", min_value=0,
                                                     format="R$ %.2f"),
         "valor_estoque": st.column_config.NumberColumn("Valor em estoque", format="R$ %.2f"),
+        "fornecedor": "Fornecedor",
+        "consumo_90d": st.column_config.NumberColumn("Consumo 90 dias", min_value=0,
+                                                     format="localized"),
     },
 )
 
 if st.button("💾 Salvar alterações", type="primary"):
     db.executar_varios(
         "UPDATE produtos SET nome = ?, unidade = ?, estoque_atual = ?, estoque_minimo = ?, "
-        "lead_time_dias = ?, custo_unit = ? WHERE id = ?",
+        "lead_time_dias = ?, custo_unit = ?, fornecedor = ?, consumo_90d = ? WHERE id = ?",
         [(r.nome, r.unidade, float(r.estoque_atual), float(r.estoque_minimo),
-          int(r.lead_time_dias), float(r.custo_unit), int(r.id)) for r in editado.itertuples()],
+          int(r.lead_time_dias), float(r.custo_unit), str(r.fornecedor or ""),
+          float(r.consumo_90d or 0), int(r.id)) for r in editado.itertuples()],
     )
     st.toast("Estoque atualizado.")
     st.rerun()

@@ -6,8 +6,13 @@ O app leva o fluxo clássico do PCP de uma planilha para um sistema simples:
 
 **pedidos → ordens de produção → MRP de materiais → programação por máquina**
 
-Os dados de exemplo são de uma panificadora **fictícia** (Panificadora Trigo Bom): 5 produtos,
-13 matérias-primas e embalagens, 3 linhas de produção e 12 pedidos com datas relativas a hoje.
+O app traz duas empresas **fictícias** de exemplo, escolhidas na barra lateral:
+
+- **Panificadora Trigo Bom**: 5 produtos, 13 matérias-primas e embalagens, 3 linhas de produção.
+- **Vasos Oeste Plásticos**: vasos injetados com reciclado próprio, masterbatch de cor, aditivo UV,
+  3 injetoras e setup de troca de molde e de cor.
+
+Os pedidos usam datas relativas a hoje, então a demonstração funciona em qualquer dia.
 
 ## Telas
 
@@ -19,6 +24,7 @@ Os dados de exemplo são de uma panificadora **fictícia** (Panificadora Trigo B
 | **Ficha técnica** | Estrutura do produto (BOM), custo de material por unidade, roteiro e máquinas |
 | **MRP** | Ordens de produção, necessidade de materiais, sugestão de compra e data limite (exporta CSV) |
 | **Programação** | Sequenciamento por máquina pela menor data de entrega, Gantt e folga de cada ordem |
+| **Compras** | Consumo médio, cobertura em dias contra o lead time, ponto de pedido e lista por fornecedor (CSV) |
 
 ## Lógica de cálculo (`pcp.py`)
 
@@ -30,6 +36,9 @@ Os dados de exemplo são de uma panificadora **fictícia** (Panificadora Trigo B
 3. **Programação**: as ordens de cada máquina são sequenciadas pela regra EDD (menor data de entrega),
    respeitando as horas de trabalho por dia. Ordens seguidas do mesmo produto não repetem o setup.
    Folga negativa = atraso.
+4. **Compras**: consumo/dia = consumo dos últimos 90 dias ÷ 90; cobertura = estoque ÷ consumo/dia;
+   ponto de pedido = consumo/dia × lead time + estoque mínimo. Cobertura menor que o lead time =
+   *comprar já*. A sugestão cobre o lead time + N dias (ajustável) e respeita os pedidos firmes do MRP.
 
 ## Rodar localmente
 
@@ -39,7 +48,7 @@ streamlit run app.py
 ```
 
 O banco SQLite (`pcp.db`) é criado sozinho com os dados de exemplo na primeira execução.
-O botão **Restaurar dados de exemplo** na barra lateral volta tudo ao estado inicial.
+O botão **Restaurar dados de exemplo** na barra lateral volta a empresa escolhida ao estado inicial.
 
 ## Publicar no Streamlit Community Cloud
 

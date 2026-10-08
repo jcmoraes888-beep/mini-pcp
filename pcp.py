@@ -153,6 +153,51 @@ def programar(ordens: pd.DataFrame, roteiro: pd.DataFrame, maquinas: pd.DataFram
     return pd.DataFrame(linhas, columns=cols)
 
 
+# ---------------------------------------------------------------- 4. Compras
+def calcular_compras(produtos: pd.DataFrame, mrp: pd.DataFrame, dias_cobrir: int = 30) -> pd.DataFrame:
+    """Controle de compras pelo consumo médio (o método da planilha, item a item).
+
+    - Consumo diário = consumo dos últimos 90 dias ÷ 90.
+    - Cobertura (dias) = estoque ÷ consumo diário.
+    - Ponto de pedido = consumo diário × lead time + estoque mínimo (segurança).
+    - Sugestão (só quando o estoque chega ao ponto de pedido) = o que leva o estoque a cobrir
+      o lead time + `dias_cobrir` dias, mais o mínimo. Se os pedidos firmes (MRP) pedirem
+      mais que isso, vale o maior.
+    """
+    mat = produtos[produtos["tipo"] != "PA"].copy()
+    mat["consumo_dia"] = mat["consumo_90d"] / 90
+    mat["cobertura_dias"] = (mat["estoque_atual"] / mat["consumo_dia"]).where(mat["consumo_dia"] > 0)
+    mat["ponto_pedido"] = mat["consumo_dia"] * mat["lead_time_dias"] + mat["estoque_minimo"]
+    alvo = mat["consumo_dia"] * (mat["lead_time_dias"] + dias_cobrir) + mat["estoque_minimo"]
+    pelo_consumo = (alvo - mat["estoque_atual"]).clip(lower=0).where(
+        mat["estoque_atual"] <= mat["ponto_pedido"], 0)
+    pelo_mrp = mat["codigo"].map(mrp.set_index("codigo")["sugestao_compra"]).fillna(0)
+    mat["sugestao"] = pd.concat([pelo_consumo, pelo_mrp], axis=1).max(axis=1).apply(math.ceil)
+    mat["valor_compra"] = (mat["sugestao"] * mat["custo_unit"]).round(2)
+    mat["status_mrp"] = mat["codigo"].map(mrp.set_index("codigo")["status"]).fillna("")
+
+    def situacao(r):
+        if r.status_mrp.startswith("🔴"):  # os pedidos firmes já furam o estoque
+            return "🔴 Comprar já"
+        if r.consumo_dia <= 0:
+            return "⚪ Sem consumo"
+        if r.cobertura_dias < r.lead_time_dias:
+            return "🔴 Comprar já"
+        if r.estoque_atual <= r.ponto_pedido or r.sugestao > 0:
+            return "🟠 Pedir agora"
+        if r.cobertura_dias < r.lead_time_dias + 15:
+            return "🟡 Atenção"
+        return "🟢 OK"
+
+    mat["situacao"] = mat.apply(situacao, axis=1)
+    ordem = {"🔴 Comprar já": 0, "🟠 Pedir agora": 1, "🟡 Atenção": 2, "🟢 OK": 3, "⚪ Sem consumo": 4}
+    mat = mat.sort_values(["situacao", "cobertura_dias"],
+                          key=lambda s: s.map(ordem) if s.name == "situacao" else s)
+    return mat[["situacao", "fornecedor", "codigo", "nome", "unidade", "estoque_atual",
+                "consumo_dia", "cobertura_dias", "lead_time_dias", "ponto_pedido",
+                "sugestao", "custo_unit", "valor_compra"]].reset_index(drop=True)
+
+
 def calcular_tudo(dados: dict, hoje: date, inicio: datetime | None = None,
                   hora_inicio: int = 6) -> dict:
     inicio = inicio or datetime.combine(hoje, time(hora_inicio))

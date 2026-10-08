@@ -21,6 +21,11 @@ def contexto():
     return dados, pcp.calcular_tudo(dados, date.today())
 
 
+def un() -> str:
+    """Unidade do produto acabado da empresa de exemplo (pct, un...)."""
+    return db.empresa()["un"]
+
+
 def num(valor, casas=0):
     """Formata número no padrão brasileiro."""
     texto = f"{valor:,.{casas}f}"

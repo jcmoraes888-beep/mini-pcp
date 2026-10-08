@@ -1,0 +1,9 @@
+# Tema escuro, mais confortável para quem passa o dia no planejamento
+[theme]
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#111318"
+secondaryBackgroundColor = "#1b1e25"
+textColor = "#e6e7ea"
+borderColor = "#2c303a"
+showWidgetHoverBorder = true

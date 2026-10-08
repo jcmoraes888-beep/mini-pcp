@@ -19,7 +19,7 @@ with st.expander("➕ Novo pedido", expanded=pedidos.empty):
         cliente = c1.text_input("Cliente")
         produto_id = c2.selectbox("Produto", acabados["id"],
                                   format_func=dict(zip(acabados["id"], acabados["nome"])).get)
-        qtd = c3.number_input("Quantidade (pct)", min_value=1, step=100, value=1000)
+        qtd = c3.number_input(f"Quantidade ({ui.un()})", min_value=1, step=100, value=1000)
         entrega = c4.date_input("Entrega", value=date.today() + timedelta(days=3),
                                 format="DD/MM/YYYY")
         if st.form_submit_button("Salvar pedido", type="primary"):
@@ -44,7 +44,7 @@ editado = st.data_editor(
     column_config={
         "id": st.column_config.NumberColumn("Nº", width="small"),
         "cliente": "Cliente", "produto": "Produto",
-        "quantidade": st.column_config.NumberColumn("Qtd. (pct)", min_value=1, format="localized"),
+        "quantidade": st.column_config.NumberColumn(f"Qtd. ({ui.un()})", min_value=1, format="localized"),
         "data_entrega": st.column_config.DateColumn("Entrega", format=ui.FMT_DATA),
         "status": st.column_config.SelectboxColumn("Status", options=db.STATUS_PEDIDO,
                                                    required=True),
@@ -67,5 +67,5 @@ resumo = (pedidos[pedidos["status"] == "Aberto"]
 st.subheader("Demanda aberta por produto")
 st.dataframe(resumo, hide_index=True,
              column_config={"produto": "Produto",
-                            "quantidade": st.column_config.NumberColumn("Qtd. (pct)",
+                            "quantidade": st.column_config.NumberColumn(f"Qtd. ({ui.un()})",
                                                                         format="localized")})
