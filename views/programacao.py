@@ -12,25 +12,40 @@ dados, res = ui.contexto()
 
 st.title("📅 Programação da produção")
 st.caption("Sequência por máquina pela **menor data de entrega** (regra EDD). "
-           "Ordens seguidas do mesmo produto não repetem o setup.")
+           "Ordens seguidas do mesmo produto não repetem o setup. Com o **plano B**, ordens de "
+           "máquina parada ou que atrasariam vão para a máquina alternativa (Ficha técnica).")
 
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns([1, 1, 1.2])
 dia = c1.date_input("Começar a programar em", value=date.today(), format="DD/MM/YYYY")
 hora = c2.number_input("Início do turno (hora)", min_value=0, max_value=23, value=6)
+usar_b = c3.toggle("Usar plano B (remanejar ordens)", value=True)
 
-prog = pcp.programar(res["ordens"], dados["roteiro"], dados["maquinas"],
-                     datetime.combine(dia, time(int(hora))), int(hora))
+paradas = dados["maquinas"][dados["maquinas"]["status"] == "Parada"]
+for m in paradas.itertuples():
+    st.error(f"⛔ **{m.nome}** parada" + (f" · {m.motivo}" if m.motivo else ""))
+
+inicio = datetime.combine(dia, time(int(hora)))
+if usar_b:
+    prog, trocas = pcp.plano_b(res["ordens"], dados["roteiro"], dados["maquinas"],
+                               dados["alternativas"], inicio, int(hora))
+else:
+    prog = pcp.programar(res["ordens"], dados["roteiro"], dados["maquinas"], inicio, int(hora))
+    trocas = prog.iloc[0:0]
 
 if prog.empty:
     st.success("Nenhuma ordem de produção para programar.")
     st.stop()
 
 com_horario = prog.dropna(subset=["inicio"])
-atrasos = (prog["situacao"] == "🔴 Atrasa").sum()
-k1, k2, k3 = st.columns(3)
+atrasos = prog["situacao"].str.startswith("🔴").sum()
+sem_maquina = prog["situacao"].str.startswith("⛔").sum()
+k1, k2, k3, k4 = st.columns(4)
 k1.metric("Ordens programadas", len(com_horario))
 k2.metric("Ordens que atrasam", int(atrasos))
-k3.metric("Término da última ordem",
+k3.metric("Remanejadas (plano B)", len(trocas),
+          f"{int(sem_maquina)} paradas sem alternativa" if sem_maquina else None,
+          delta_color="inverse")
+k4.metric("Término da última ordem",
           com_horario["fim"].max().strftime("%d/%m %H:%M") if not com_horario.empty else "-")
 
 if not com_horario.empty:
@@ -76,9 +91,25 @@ if not com_horario.empty:
     st.caption("Cada bloco = uma ordem (código e quantidade). Blocos curtos escondem o texto: "
                "passe o mouse para ver cliente, entrega e situação.")
 
+if len(trocas):
+    st.subheader("🔁 Plano B: ordens remanejadas")
+    st.dataframe(
+        trocas, hide_index=True,
+        column_config={
+            "pedido_id": None, "codigo": "Código", "produto": "Produto", "cliente": "Cliente",
+            "quantidade": st.column_config.NumberColumn("Qtd.", format="localized"),
+            "de": "Máquina principal", "para": "Vai para",
+            "prioridade": st.column_config.NumberColumn("Prioridade", format="%d"),
+            "motivo": "Por quê",
+        },
+    )
+    st.caption("A troca só fica quando diminui o atraso total: não adianta salvar uma ordem "
+               "atrasando as outras da máquina alternativa.")
+
 st.dataframe(
     prog, hide_index=True,
     column_config={
+        "pedido_id": None, "maquina_original": "Máquina principal",
         "maquina": "Máquina", "codigo": "Código", "produto": "Produto", "cliente": "Cliente",
         "quantidade": st.column_config.NumberColumn("Qtd.", format="localized"),
         "data_entrega": st.column_config.DateColumn("Entrega", format=ui.FMT_DATA),

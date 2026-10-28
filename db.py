@@ -34,13 +34,22 @@ CREATE TABLE IF NOT EXISTS bom (
 CREATE TABLE IF NOT EXISTS maquinas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT UNIQUE NOT NULL,
-    horas_dia REAL NOT NULL DEFAULT 16
+    horas_dia REAL NOT NULL DEFAULT 16,
+    status TEXT NOT NULL DEFAULT 'Operando',
+    motivo TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS roteiro (
     produto_id INTEGER PRIMARY KEY REFERENCES produtos(id),
     maquina_id INTEGER NOT NULL REFERENCES maquinas(id),
     un_por_hora REAL NOT NULL,
     setup_min REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS alternativas (
+    produto_id INTEGER NOT NULL REFERENCES produtos(id),
+    maquina_id INTEGER NOT NULL REFERENCES maquinas(id),
+    prioridade INTEGER NOT NULL DEFAULT 2,
+    un_por_hora REAL NOT NULL,
+    PRIMARY KEY (produto_id, maquina_id)
 );
 CREATE TABLE IF NOT EXISTS pedidos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +64,7 @@ CREATE TABLE IF NOT EXISTS pedidos (
 
 TIPOS = {"PA": "Produto acabado", "MP": "Matéria-prima", "EMB": "Embalagem"}
 STATUS_PEDIDO = ["Aberto", "Entregue", "Cancelado"]
+STATUS_MAQUINA = ["Operando", "Parada"]
 
 
 def conectar():
@@ -95,6 +105,11 @@ def iniciar():
                           ("consumo_90d", "REAL NOT NULL DEFAULT 0")):
             if col not in colunas:  # banco criado por uma versão antiga
                 con.execute(f"ALTER TABLE produtos ADD COLUMN {col} {tipo}")
+        col_maq = {c[1] for c in con.execute("PRAGMA table_info(maquinas)")}
+        for col, tipo in (("status", "TEXT NOT NULL DEFAULT 'Operando'"),
+                          ("motivo", "TEXT NOT NULL DEFAULT ''")):
+            if col not in col_maq:
+                con.execute(f"ALTER TABLE maquinas ADD COLUMN {col} {tipo}")
         vazio = con.execute("SELECT COUNT(*) FROM produtos").fetchone()[0] == 0
     if vazio:
         carregar_exemplo(exemplo_atual())
@@ -118,7 +133,7 @@ def carregar_exemplo(exemplo: str = "panificadora"):
     """Apaga tudo e recarrega uma das empresas fictícias de demonstração."""
     dados = _dados_panificadora() if exemplo == "panificadora" else _dados_vasos()
     with conectar() as con:
-        for tabela in ("pedidos", "roteiro", "bom", "maquinas", "produtos"):
+        for tabela in ("pedidos", "alternativas", "roteiro", "bom", "maquinas", "produtos"):
             con.execute(f"DELETE FROM {tabela}")
         con.execute("DELETE FROM sqlite_sequence")
         con.execute("INSERT OR REPLACE INTO config (chave, valor) VALUES ('exemplo', ?)", (exemplo,))
@@ -138,6 +153,11 @@ def carregar_exemplo(exemplo: str = "panificadora"):
         con.executemany(
             "INSERT INTO roteiro (produto_id, maquina_id, un_por_hora, setup_min) VALUES (?,?,?,?)",
             [(ids[p], maq[m], t, st) for p, m, t, st in dados["roteiro"]],
+        )
+        con.executemany(
+            "INSERT INTO alternativas (produto_id, maquina_id, prioridade, un_por_hora) "
+            "VALUES (?,?,?,?)",
+            [(ids[p], maq[m], pr, t) for p, m, pr, t in dados["alternativas"]],
         )
         # Datas relativas a hoje, para a demonstração funcionar em qualquer dia
         hoje = date.today()
@@ -193,6 +213,12 @@ def _dados_panificadora() -> dict:
         ("HB4", "Linha 2 - Pães especiais", 280, 40),
         ("TOR160", "Linha 3 - Torradas", 200, 20),
     ]
+    alternativas = [  # plano B: produto, máquina alternativa, prioridade, un/h nessa máquina
+        ("PF500", "Linha 2 - Pães especiais", 2, 300),
+        ("PI500", "Linha 2 - Pães especiais", 2, 260),
+        ("BIS300", "Linha 1 - Pão de forma", 2, 250),
+        ("HB4", "Linha 1 - Pão de forma", 2, 220),
+    ]
     pedidos = [
         ("Supermercado Vila Nova", "PF500", 3000, 1),
         ("Rede Mercadão Oeste", "PF500", 6000, 1),
@@ -208,7 +234,7 @@ def _dados_panificadora() -> dict:
         ("Mercearia São José", "PF500", 1200, -1),
     ]
     return {"produtos": produtos, "bom": bom, "maquinas": maquinas,
-            "roteiro": roteiro, "pedidos": pedidos}
+            "roteiro": roteiro, "alternativas": alternativas, "pedidos": pedidos}
 
 
 def _dados_vasos() -> dict:
@@ -259,6 +285,14 @@ def _dados_vasos() -> dict:
         ("VR8-CE", "Injetora 3 - 800 t", 140, 150),
         ("JD60-CE", "Injetora 3 - 800 t", 90, 180),
     ]
+    alternativas = [  # plano B: o molde também roda nessas máquinas (prioridade 2, 3...)
+        ("VR3-PT", "Injetora 2 - 450 t", 2, 520),
+        ("VR5-PT", "Injetora 3 - 800 t", 2, 260),
+        ("VR5-PT", "Injetora 1 - 250 t", 3, 240),
+        ("VR5-CE", "Injetora 3 - 800 t", 2, 250),
+        ("CQ-VD", "Injetora 3 - 800 t", 2, 180),
+        ("VR8-CE", "Injetora 2 - 450 t", 2, 110),
+    ]
     pedidos = [
         ("Garden Center Flora", "VR3-PT", 12000, 2),
         ("Rede Casa & Jardim", "VR5-PT", 14000, 2),
@@ -274,7 +308,7 @@ def _dados_vasos() -> dict:
         ("Garden Center Flora", "VR3-PT", 6000, -2),
     ]
     return {"produtos": produtos, "bom": bom, "maquinas": maquinas,
-            "roteiro": roteiro, "pedidos": pedidos}
+            "roteiro": roteiro, "alternativas": alternativas, "pedidos": pedidos}
 
 
 def carregar_tudo():
@@ -291,4 +325,5 @@ def carregar_tudo():
         "bom": consultar("SELECT * FROM bom"),
         "maquinas": consultar("SELECT * FROM maquinas ORDER BY nome"),
         "roteiro": consultar("SELECT * FROM roteiro"),
+        "alternativas": consultar("SELECT * FROM alternativas ORDER BY produto_id, prioridade"),
     }

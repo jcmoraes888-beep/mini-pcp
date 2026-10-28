@@ -7,8 +7,9 @@ import ui
 
 ui.configurar()
 dados, _ = ui.contexto()
-produtos, bom, roteiro, maquinas = (dados["produtos"], dados["bom"],
-                                    dados["roteiro"], dados["maquinas"])
+produtos, bom, roteiro, maquinas, alternativas = (dados["produtos"], dados["bom"],
+                                                  dados["roteiro"], dados["maquinas"],
+                                                  dados["alternativas"])
 acabados = produtos[produtos["tipo"] == "PA"]
 materiais = produtos[produtos["tipo"] != "PA"]
 nome_por_id = dict(zip(produtos["id"], produtos["nome"]))
@@ -22,7 +23,8 @@ if acabados.empty:
 
 pa = st.selectbox("Produto acabado", acabados["id"], format_func=nome_por_id.get)
 
-aba_bom, aba_rot, aba_maq = st.tabs(["Ficha técnica (BOM)", "Roteiro", "Máquinas"])
+aba_bom, aba_rot, aba_alt, aba_maq = st.tabs(
+    ["Ficha técnica (BOM)", "Roteiro", "Plano B (máquinas alternativas)", "Máquinas"])
 
 with aba_bom:
     atual = bom[bom["produto_id"] == pa].merge(
@@ -85,32 +87,80 @@ with aba_rot:
         if rot is None:
             st.warning("Este produto ainda não tem roteiro: as ordens dele não entram na programação.")
 
+with aba_alt:
+    nome_maq = dict(zip(maquinas["id"], maquinas["nome"]))
+    id_maq = {v: k for k, v in nome_maq.items()}
+    principal = roteiro.loc[roteiro["produto_id"] == pa, "maquina_id"]
+    principal = int(principal.iloc[0]) if not principal.empty else None
+    st.caption(
+        "Em quais outras máquinas este produto também roda (o molde serve), em ordem de "
+        "preferência. Quando a máquina principal "
+        f"(**{nome_maq.get(principal, 'sem roteiro')}**) para ou a ordem atrasa, a programação "
+        "tenta a prioridade 2, depois a 3...")
+    alt = alternativas[alternativas["produto_id"] == pa]
+    tab_alt = pd.DataFrame({"maquina": alt["maquina_id"].map(nome_maq),
+                            "prioridade": alt["prioridade"], "un_por_hora": alt["un_por_hora"]})
+    ed_alt = st.data_editor(
+        tab_alt, hide_index=True, num_rows="dynamic", key=f"alt_{pa}",
+        column_config={
+            "maquina": st.column_config.SelectboxColumn(
+                "Máquina alternativa",
+                options=sorted(n for i, n in nome_maq.items() if i != principal), required=True),
+            "prioridade": st.column_config.NumberColumn("Prioridade", min_value=2, max_value=9,
+                                                        step=1, default=2, required=True),
+            "un_por_hora": st.column_config.NumberColumn(
+                "Produtividade nessa máquina (un/h)", min_value=1.0, required=True),
+        },
+    )
+    if st.button("💾 Salvar plano B", type="primary"):
+        linhas = ed_alt.dropna()
+        if linhas["maquina"].duplicated().any():
+            st.error("Há máquinas repetidas.")
+        else:
+            with db.conectar() as con:
+                con.execute("DELETE FROM alternativas WHERE produto_id = ?", (int(pa),))
+                con.executemany(
+                    "INSERT INTO alternativas (produto_id, maquina_id, prioridade, un_por_hora) "
+                    "VALUES (?,?,?,?)",
+                    [(int(pa), int(id_maq[r.maquina]), int(r.prioridade), float(r.un_por_hora))
+                     for r in linhas.itertuples()])
+            st.toast("Plano B salvo.")
+            st.rerun()
+
 with aba_maq:
-    st.caption("Horas de trabalho por dia de cada máquina (ex.: 2 turnos = 16 h).")
+    st.caption("Horas de trabalho por dia de cada máquina (ex.: 2 turnos = 16 h). "
+               "Marque **Parada** quando a máquina entrar em manutenção: as ordens dela vão "
+               "para as máquinas alternativas do plano B.")
     ed_maq = st.data_editor(
         maquinas, hide_index=True, num_rows="dynamic", key="maquinas",
         column_config={
             "id": None, "nome": st.column_config.TextColumn("Máquina / linha", required=True),
             "horas_dia": st.column_config.NumberColumn("Horas por dia", min_value=1,
                                                        max_value=23.5, required=True),
+            "status": st.column_config.SelectboxColumn("Status", options=db.STATUS_MAQUINA,
+                                                       default="Operando", required=True),
+            "motivo": st.column_config.TextColumn("Motivo / previsão de volta"),
         },
     )
     if st.button("💾 Salvar máquinas", type="primary"):
         ed_maq = ed_maq.dropna(subset=["nome", "horas_dia"])
         removidas = set(maquinas["id"]) - set(ed_maq["id"].dropna())
-        usadas = removidas & set(roteiro["maquina_id"])
+        usadas = removidas & (set(roteiro["maquina_id"]) | set(alternativas["maquina_id"]))
         if usadas:
-            st.error("Não dá para excluir máquina usada em roteiro. Troque o roteiro antes.")
+            st.error("Não dá para excluir máquina usada em roteiro ou plano B. Troque antes.")
         else:
             with db.conectar() as con:
                 for mid in removidas:
                     con.execute("DELETE FROM maquinas WHERE id = ?", (int(mid),))
                 for r in ed_maq.itertuples():
+                    status = r.status if r.status in db.STATUS_MAQUINA else "Operando"
+                    motivo = "" if pd.isna(r.motivo) else str(r.motivo)
                     if pd.isna(r.id):
-                        con.execute("INSERT INTO maquinas (nome, horas_dia) VALUES (?,?)",
-                                    (r.nome, float(r.horas_dia)))
+                        con.execute("INSERT INTO maquinas (nome, horas_dia, status, motivo) "
+                                    "VALUES (?,?,?,?)", (r.nome, float(r.horas_dia), status, motivo))
                     else:
-                        con.execute("UPDATE maquinas SET nome = ?, horas_dia = ? WHERE id = ?",
-                                    (r.nome, float(r.horas_dia), int(r.id)))
+                        con.execute("UPDATE maquinas SET nome = ?, horas_dia = ?, status = ?, "
+                                    "motivo = ? WHERE id = ?",
+                                    (r.nome, float(r.horas_dia), status, motivo, int(r.id)))
             st.toast("Máquinas salvas.")
             st.rerun()

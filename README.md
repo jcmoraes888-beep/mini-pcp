@@ -21,9 +21,9 @@ Os pedidos usam datas relativas a hoje, então a demonstração funciona em qual
 | **Painel** | Indicadores, carga de cada máquina em dias, alertas de compra e ordens que atrasam |
 | **Pedidos** | Carteira de pedidos: cadastro, status (aberto/entregue/cancelado) e data de entrega |
 | **Estoque** | Saldo, estoque mínimo, lead time e custo de cada item, com valor em estoque |
-| **Ficha técnica** | Estrutura do produto (BOM), custo de material por unidade, roteiro e máquinas |
+| **Ficha técnica** | Estrutura do produto (BOM), custo de material por unidade, roteiro, **plano B** (máquinas alternativas com prioridade) e máquinas com status Operando/Parada |
 | **MRP** | Ordens de produção, necessidade de materiais, sugestão de compra e data limite (exporta CSV) |
-| **Programação** | Sequenciamento por máquina pela menor data de entrega, Gantt e folga de cada ordem |
+| **Programação** | Sequenciamento por máquina pela menor data de entrega, Gantt, folga de cada ordem e **ordens remanejadas pelo plano B** |
 | **Compras** | Consumo médio, cobertura em dias contra o lead time, ponto de pedido e lista por fornecedor (CSV) |
 
 ## Lógica de cálculo (`pcp.py`)
@@ -36,7 +36,14 @@ Os pedidos usam datas relativas a hoje, então a demonstração funciona em qual
 3. **Programação**: as ordens de cada máquina são sequenciadas pela regra EDD (menor data de entrega),
    respeitando as horas de trabalho por dia. Ordens seguidas do mesmo produto não repetem o setup.
    Folga negativa = atraso.
-4. **Compras**: consumo/dia = consumo dos últimos 90 dias ÷ 90; cobertura = estoque ÷ consumo/dia;
+4. **Plano B (máquina parada ou ordem atrasando)**: cada produto pode rodar em máquinas
+   alternativas, em ordem de prioridade (2, 3...), cada uma com a sua produtividade.
+   - Máquina marcada como **Parada** não recebe ordens: cada ordem dela vai para a alternativa
+     que deixa o programa com menos atraso.
+   - Depois, cada ordem que **atrasa** testa as alternativas. A troca só fica se o atraso total
+     diminuir, para não salvar uma ordem atrasando as outras da máquina que a recebeu.
+   - A tela mostra de onde a ordem saiu, para onde foi, a prioridade usada e o motivo.
+5. **Compras**: consumo/dia = consumo dos últimos 90 dias ÷ 90; cobertura = estoque ÷ consumo/dia;
    ponto de pedido = consumo/dia × lead time + estoque mínimo. Cobertura menor que o lead time =
    *comprar já*. A sugestão cobre o lead time + N dias (ajustável) e respeita os pedidos firmes do MRP.
 
@@ -71,6 +78,8 @@ views/            # uma página por arquivo
 ## Próximos passos (v2)
 
 - Considerar estoque mínimo de produto acabado nas ordens
+- Plano B dividindo uma ordem grande entre duas máquinas
+- Priorizar pela cobertura do estoque (dias até faltar), além da data de entrega
 - Calendário com fins de semana e feriados
 - Programação para trás (data mais tarde de início) e simulação de hora extra
 - Integração com o App Kaizen de Perdas (perdas reais reduzindo a produtividade)

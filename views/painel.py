@@ -15,11 +15,17 @@ st.caption("Planejamento e controle da produção para pequenas indústrias: "
            "pedidos → necessidade de produção → MRP de materiais → programação por máquina.")
 
 abertos = pedidos[pedidos["status"] == "Aberto"]
-atrasadas = prog[prog["situacao"] == "🔴 Atrasa"]
+atrasadas = prog[prog["situacao"].str.startswith("🔴")]
+trocas = res["trocas"]
+paradas = dados["maquinas"][dados["maquinas"]["status"] == "Parada"]
 urgentes = mrp[mrp["status"] == "🔴 Falta - urgente"]
 a_comprar = mrp[mrp["sugestao_compra"] > 0]
 
-c1, c2, c3, c4 = st.columns(4)
+for m in paradas.itertuples():
+    st.error(f"⛔ **{m.nome}** parada" + (f" · {m.motivo}" if m.motivo else "")
+             + " · ordens remanejadas pelo plano B na Programação")
+
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Pedidos abertos", len(abertos), f"{ui.num(abertos['quantidade'].sum())} {ui.un()}",
           delta_color="off")
 c2.metric("Ordens de produção", len(ordens), f"{ui.num(ordens['quantidade'].sum())} {ui.un()} a produzir",
@@ -27,6 +33,10 @@ c2.metric("Ordens de produção", len(ordens), f"{ui.num(ordens['quantidade'].su
 c3.metric("Ordens que atrasam", len(atrasadas),
           "verificar programação" if len(atrasadas) else "tudo no prazo",
           delta_color="inverse" if len(atrasadas) else "off")
+c5.metric("Plano B", f"{len(trocas)} remanejadas",
+          (f"{len(paradas)} máquina parada" if len(paradas) == 1 else f"{len(paradas)} máquinas paradas")
+          if len(paradas) else "todas operando",
+          delta_color="inverse" if len(paradas) else "off")
 c4.metric("Materiais a comprar", len(a_comprar), f"{len(urgentes)} urgentes",
           delta_color="inverse" if len(urgentes) else "off")
 

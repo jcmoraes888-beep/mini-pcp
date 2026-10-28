@@ -112,18 +112,32 @@ def _avancar(inicio: datetime, horas: float, hora_inicio: int, horas_dia: float)
 
 
 def programar(ordens: pd.DataFrame, roteiro: pd.DataFrame, maquinas: pd.DataFrame,
-              inicio: datetime, hora_inicio: int = 6) -> pd.DataFrame:
+              inicio: datetime, hora_inicio: int = 6, alocacao: dict | None = None) -> pd.DataFrame:
     """Sequencia as ordens em cada máquina pela menor data de entrega (regra EDD).
-    Ordens seguidas do mesmo produto em uma máquina não repetem o setup."""
-    cols = ["maquina", "codigo", "produto", "cliente", "quantidade", "data_entrega",
-            "setup_h", "producao_h", "inicio", "fim", "folga_h", "situacao"]
+    Ordens seguidas do mesmo produto em uma máquina não repetem o setup.
+
+    `alocacao` = {pedido_id: (maquina_id, un_por_hora)} troca a máquina do roteiro
+    de algumas ordens (usado pelo plano B). Máquina com status "Parada" não recebe ordens.
+    """
+    cols = ["pedido_id", "maquina", "maquina_original", "codigo", "produto", "cliente",
+            "quantidade", "data_entrega", "setup_h", "producao_h", "inicio", "fim",
+            "folga_h", "situacao"]
     if ordens.empty:
         return pd.DataFrame(columns=cols)
-    o = (ordens.merge(roteiro, on="produto_id", how="left")
-         .merge(maquinas.rename(columns={"id": "maquina_id", "nome": "maquina"}),
-                on="maquina_id", how="left"))
+    maq = maquinas.rename(columns={"id": "maquina_id", "nome": "maquina"})
+    if "status" not in maq:
+        maq = maq.assign(status="Operando")
+    nomes = dict(zip(maq["maquina_id"], maq["maquina"]))
+    o = ordens.merge(roteiro, on="produto_id", how="left")
+    o["maquina_original"] = o["maquina_id"].map(nomes)
+    for pid, (mid, taxa) in (alocacao or {}).items():
+        sel = o["pedido_id"] == pid
+        o.loc[sel, "maquina_id"] = mid
+        o.loc[sel, "un_por_hora"] = taxa
+    o = o.merge(maq[["maquina_id", "maquina", "horas_dia", "status"]], on="maquina_id", how="left")
     sem_roteiro = o[o["maquina_id"].isna()]
-    o = o.dropna(subset=["maquina_id"])
+    paradas = o[o["maquina_id"].notna() & (o["status"] == "Parada")]
+    o = o[o["maquina_id"].notna() & (o["status"] != "Parada")]
 
     linhas = []
     for _, grupo in o.groupby("maquina", sort=True):
@@ -136,8 +150,9 @@ def programar(ordens: pd.DataFrame, roteiro: pd.DataFrame, maquinas: pd.DataFram
             prazo = datetime.combine(r["data_entrega"], time(hora_inicio))
             folga = (prazo - fim).total_seconds() / 3600
             linhas.append({
-                "maquina": r["maquina"], "codigo": r["codigo"], "produto": r["produto"],
-                "cliente": r["cliente"], "quantidade": r["quantidade"],
+                "pedido_id": r["pedido_id"], "maquina": r["maquina"],
+                "maquina_original": r["maquina_original"], "codigo": r["codigo"],
+                "produto": r["produto"], "cliente": r["cliente"], "quantidade": r["quantidade"],
                 "data_entrega": r["data_entrega"], "setup_h": round(setup_h, 2),
                 "producao_h": round(prod_h, 2), "inicio": ini, "fim": fim,
                 "folga_h": round(folga, 1),
@@ -145,12 +160,110 @@ def programar(ordens: pd.DataFrame, roteiro: pd.DataFrame, maquinas: pd.DataFram
             })
             cursor, anterior = fim, r["produto_id"]
 
-    for _, r in sem_roteiro.iterrows():
-        linhas.append({"maquina": "— sem roteiro —", "codigo": r["codigo"],
+    for _, r in paradas.iterrows():
+        linhas.append({"pedido_id": r["pedido_id"], "maquina": r["maquina"],
+                       "maquina_original": r["maquina_original"], "codigo": r["codigo"],
                        "produto": r["produto"], "cliente": r["cliente"],
+                       "quantidade": r["quantidade"], "data_entrega": r["data_entrega"],
+                       "situacao": "⛔ Máquina parada"})
+    for _, r in sem_roteiro.iterrows():
+        linhas.append({"pedido_id": r["pedido_id"], "maquina": "— sem roteiro —",
+                       "codigo": r["codigo"], "produto": r["produto"], "cliente": r["cliente"],
                        "quantidade": r["quantidade"], "data_entrega": r["data_entrega"],
                        "situacao": "⚪ Cadastre o roteiro"})
     return pd.DataFrame(linhas, columns=cols)
+
+
+def _custo(prog: pd.DataFrame) -> float:
+    """Nota do programa: ordem sem máquina pesa muito; depois, o total de horas de atraso."""
+    sem_horario = prog["fim"].isna().sum()
+    atraso = (-prog["folga_h"].dropna()).clip(lower=0).sum()
+    return sem_horario * 1_000_000 + atraso
+
+
+def plano_b(ordens: pd.DataFrame, roteiro: pd.DataFrame, maquinas: pd.DataFrame,
+            alternativas: pd.DataFrame, inicio: datetime, hora_inicio: int = 6):
+    """Programa com plano B: remaneja ordens para máquinas alternativas.
+
+    1. Ordem cuja máquina está **parada** vai para a alternativa (prioridade 1, 2, 3...)
+       que deixa o programa com menos atraso.
+    2. Depois, cada ordem que **atrasa** testa as alternativas; a troca só fica se
+       diminuir o atraso total (não adianta salvar uma ordem atrasando outras).
+
+    Devolve (programa, trocas).
+    """
+    cols_trocas = ["pedido_id", "codigo", "produto", "cliente", "quantidade", "de", "para",
+                   "prioridade", "motivo"]
+    base = programar(ordens, roteiro, maquinas, inicio, hora_inicio)
+    if ordens.empty or alternativas is None or alternativas.empty:
+        return base, pd.DataFrame(columns=cols_trocas)
+
+    status = dict(zip(maquinas["id"], maquinas.get("status", pd.Series("Operando", maquinas.index))))
+    nomes = dict(zip(maquinas["id"], maquinas["nome"]))
+    principal = dict(zip(roteiro["produto_id"], roteiro["maquina_id"]))
+
+    def candidatas(produto_id, excluir):
+        alt = alternativas[alternativas["produto_id"] == produto_id].sort_values("prioridade")
+        return [(int(a.maquina_id), float(a.un_por_hora), int(a.prioridade)) for a in alt.itertuples()
+                if a.maquina_id not in excluir and status.get(a.maquina_id) != "Parada"]
+
+    def testar(aloc):
+        return programar(ordens, roteiro, maquinas, inicio, hora_inicio, aloc)
+
+    aloc, motivos = {}, {}
+    fila = ordens.sort_values(["data_entrega", "pedido_id"])
+    atual, nota = base, _custo(base)
+
+    # 1. máquina principal parada
+    for o in fila.itertuples():
+        mid = principal.get(o.produto_id)
+        if mid is None or status.get(mid) != "Parada":
+            continue
+        melhor = None
+        for cand, taxa, prio in candidatas(o.produto_id, {mid}):
+            n = _custo(testar({**aloc, o.pedido_id: (cand, taxa)}))
+            if melhor is None or (n, prio) < (melhor[0], melhor[3]):
+                melhor = (n, cand, taxa, prio)
+        if melhor:
+            aloc[o.pedido_id] = (melhor[1], melhor[2])
+            motivos[o.pedido_id] = (melhor[3], f"{nomes[mid]} parada")
+            atual, nota = testar(aloc), melhor[0]
+
+    # 2. ordens que atrasam na máquina atual
+    for o in fila.itertuples():
+        linha = atual[atual["pedido_id"] == o.pedido_id]
+        if linha.empty or pd.isna(linha["folga_h"].iloc[0]) or linha["folga_h"].iloc[0] >= 0:
+            continue
+        maq_atual = aloc.get(o.pedido_id, (principal.get(o.produto_id), None))[0]
+        atraso = -linha["folga_h"].iloc[0]
+        melhor = None
+        for cand, taxa, prio in candidatas(o.produto_id, {maq_atual}):
+            n = _custo(testar({**aloc, o.pedido_id: (cand, taxa)}))
+            if n < nota - 0.05 and (melhor is None or n < melhor[0]):
+                melhor = (n, cand, taxa, prio)
+        if melhor:
+            aloc[o.pedido_id] = (melhor[1], melhor[2])
+            motivos[o.pedido_id] = (melhor[3], f"atrasava {ui_h(atraso)} na {nomes[maq_atual]}")
+            atual, nota = testar(aloc), melhor[0]
+
+    trocas = []
+    for o in fila.itertuples():
+        if o.pedido_id in aloc:
+            prio, motivo = motivos[o.pedido_id]
+            trocas.append({"pedido_id": o.pedido_id, "codigo": o.codigo, "produto": o.produto,
+                           "cliente": o.cliente, "quantidade": o.quantidade,
+                           "de": nomes.get(principal.get(o.produto_id), ""),
+                           "para": nomes[aloc[o.pedido_id][0]], "prioridade": prio,
+                           "motivo": motivo})
+    atual = atual.copy()
+    movidas = atual["pedido_id"].isin(aloc)
+    atual.loc[movidas, "situacao"] = atual.loc[movidas, "situacao"] + " · plano B"
+    return atual, pd.DataFrame(trocas, columns=cols_trocas)
+
+
+def ui_h(horas: float) -> str:
+    """Horas no padrão brasileiro (ex.: 12,5 h)."""
+    return f"{horas:.1f}".replace(".", ",") + " h"
 
 
 # ---------------------------------------------------------------- 4. Compras
@@ -202,8 +315,11 @@ def calcular_tudo(dados: dict, hoje: date, inicio: datetime | None = None,
                   hora_inicio: int = 6) -> dict:
     inicio = inicio or datetime.combine(hoje, time(hora_inicio))
     ordens = gerar_ordens(dados["pedidos"], dados["produtos"])
+    programa, trocas = plano_b(ordens, dados["roteiro"], dados["maquinas"],
+                               dados.get("alternativas"), inicio, hora_inicio)
     return {
         "ordens": ordens,
         "mrp": calcular_mrp(ordens, dados["bom"], dados["produtos"], hoje),
-        "programa": programar(ordens, dados["roteiro"], dados["maquinas"], inicio, hora_inicio),
+        "programa": programa,
+        "trocas": trocas,
     }
